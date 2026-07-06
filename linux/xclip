@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# xclip shim (pasteover) — bridges agent CLIs' clipboard-image reads to the
+# Windows laptop's clipboard, served by clip-server.ps1 over the SSH
+# RemoteForward tunnel on 127.0.0.1:18339. See the pasteover README.
+#
+# Claude Code (Linux) calls:
+#   xclip -selection clipboard -t TARGETS -o      -> list mime types
+#   xclip -selection clipboard -t image/png -o    -> raw PNG bytes
+# Everything else fails silently (no real xclip on this box).
+
+PORT="${CLIP_BRIDGE_PORT:-18339}"
+HOST="${CLIP_BRIDGE_HOST:-127.0.0.1}"
+
+bridge() {  # bridge CHECK|GET  -> server response on stdout
+    local cmd="$1"
+    exec 3<>"/dev/tcp/$HOST/$PORT" 2>/dev/null || return 1
+    printf '%s\n' "$cmd" >&3
+    cat <&3
+    exec 3<&- 3>&-
+}
+
+has_image() {
+    local resp
+    resp="$(bridge CHECK 2>/dev/null)" || return 1
+    resp="${resp%%$'\r'*}"
+    resp="${resp%%$'\n'*}"
+    [ "$resp" = "PNG" ]
+}
+
+# --- parse the arguments we care about ---
+target="" out=0
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+    case "${args[$i]}" in
+        -t|-target) target="${args[$((i+1))]}"; ((i++)) ;;
+        -o|-out)    out=1 ;;
+    esac
+done
+
+if [ "$out" = 1 ]; then
+    case "$target" in
+        TARGETS)
+            if has_image; then
+                printf 'image/png\n'
+                exit 0
+            fi
+            exit 1
+            ;;
+        image/png)
+            if has_image; then
+                bridge GET
+                exit 0
+            fi
+            exit 1
+            ;;
+    esac
+fi
+
+# Anything else (copy-to-clipboard, text paste, other targets): unsupported.
+exit 1
