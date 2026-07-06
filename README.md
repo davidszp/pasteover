@@ -2,18 +2,20 @@
 
 ![pasteover: a screenshot pasted into Claude Code over SSH from Windows Terminal](assets/hero.png)
 
-Take a screenshot on your Windows machine (`Win+Shift+S`), press a key in
-Claude Code running on a remote Linux machine over SSH — and the image pastes.
-Two tiny dependency-free scripts and a standard SSH tunnel; nothing to install
-on either side.
+This is a working solution for developers on Windows machines with Windows 
+Terminal who ssh into remote machines and require a solution to the copy/paste 
+problem. By default, Terminal/ssh won't play well together with ssh/tmux.
 
-Works with **any agent CLI that reads clipboard images via `xclip`** on
-Linux — Claude Code, Codex CLI, and opencode all use the same convention. The
-steps below say "Claude Code" throughout; only step 5 (the paste keybinding)
+pasteover works with 
+- Claude Code, Codex CLI, and opencode and similar
+- ssh
+- compatible with tailscale
+
+The steps below say "Claude Code" throughout; only step 5 (the paste keybinding)
 is tool-specific.
 
 ```
-Windows laptop                                Linux box (runs Claude Code)
+Windows                                       Linux box (runs Claude Code)
 ──────────────                                ────────────────────────────
 clip-server.ps1                               xclip shim (~/.local/bin/xclip)
 listens 127.0.0.1:18339  <──  SSH tunnel  ──  connects 127.0.0.1:18339
@@ -59,7 +61,7 @@ which xclip   # must print: /home/you/.local/bin/xclip
 
 ### 2. Windows: pull the server script from the remote
 
-In PowerShell on the laptop (you already have SSH access — reuse it):
+In PowerShell on the Windows host (you already have SSH access — reuse it):
 
 ```powershell
 scp you@your-server:pasteover/windows/clip-server.ps1 $HOME\clip-server.ps1
@@ -161,7 +163,7 @@ Windows clipboard — fine on a single-user box, think twice on a shared one.
 
 ## Alternative setup: clone on the Windows host
 
-If you'd rather keep the repo on the laptop and push files *up* to the remote:
+If you'd rather keep the repo on Windows and push files *up* to the remote:
 
 ```powershell
 # 1. Clone on Windows
@@ -186,7 +188,7 @@ merge instead of overwriting.
 | File | Goes to | Machine |
 |---|---|---|
 | `linux/xclip` | `~/.local/bin/xclip` (`chmod +x`) | remote (Linux) |
-| `windows/clip-server.ps1` | anywhere, e.g. `$HOME` | laptop (Windows) |
+| `windows/clip-server.ps1` | anywhere, e.g. `$HOME` | host (Windows) |
 | `claude/keybindings.json` | `~/.claude/keybindings.json` | remote (Linux) |
 
 ## Prior art
