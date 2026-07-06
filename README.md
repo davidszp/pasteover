@@ -1,6 +1,6 @@
 # pasteover — paste Windows screenshots into Claude Code & Codex CLI over SSH
 
-Take a screenshot on your Windows laptop (`Win+Shift+S`), press a key in
+Take a screenshot on your Windows machine (`Win+Shift+S`), press a key in
 Claude Code running on a remote Linux machine over SSH — and the image pastes.
 Two tiny dependency-free scripts and a standard SSH tunnel; nothing to install
 on either side.
