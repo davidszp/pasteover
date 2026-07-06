@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>pasteover hero</title>
+<style>
+  :root {
+    --bg: #0c0c0c;
+    --titlebar: #202020;
+    --tab-active: #383838;
+    --text: #e4e4e4;
+    --dim: #969696;
+    --dimmer: #6e6e6e;
+    --rose: #e2938d;
+    --rose-bright: #f08c8c;
+    --blue: #3b9eff;
+    --yellow: #e5c07b;
+    --orange: #e5a441;
+    --mono: "Cascadia Mono", "Cascadia Code", Consolas, "DejaVu Sans Mono", monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #2a2a2a; display: flex; justify-content: center; padding: 40px; }
+
+  .window {
+    width: 1500px;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0,0,0,.6);
+    font-family: var(--mono);
+  }
+
+  /* ── Windows Terminal title bar ─────────────────────────── */
+  .titlebar { background: var(--titlebar); display: flex; align-items: stretch; height: 46px; }
+  .tab {
+    background: var(--tab-active); color: var(--text);
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 14px 0 12px; margin: 6px 0 0 8px;
+    border-radius: 6px 6px 0 0; font-size: 14px;
+    font-family: "Segoe UI", sans-serif; min-width: 300px;
+  }
+  .ps-icon {
+    width: 18px; height: 18px; border-radius: 4px;
+    background: linear-gradient(135deg,#1e60c4,#2e7ae0);
+    color: #fff; font-size: 10px; font-family: var(--mono);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .tab .close { margin-left: auto; color: var(--dim); font-size: 13px; }
+  .newtab, .dropdown {
+    color: var(--dim); font-family: "Segoe UI", sans-serif;
+    display: flex; align-items: center; padding: 0 12px; font-size: 15px; margin-top: 6px;
+  }
+  .wincontrols { margin-left: auto; display: flex; align-items: center; }
+  .wincontrols span {
+    color: #cfcfcf; font-family: "Segoe UI", sans-serif; font-size: 13px;
+    padding: 0 20px; height: 100%; display: flex; align-items: center;
+  }
+
+  /* ── terminal body ──────────────────────────────────────── */
+  .term { background: var(--bg); padding-bottom: 14px; font-size: 17px; line-height: 1.45; color: var(--text); }
+
+  /* tmux status bar */
+  .tmux { display: flex; font-size: 16.5px; background: #161616; color: var(--dim); white-space: pre; }
+  .tmux .session { background: var(--blue); color: #0c0c0c; font-weight: 600; padding: 1px 8px; }
+  .tmux .wins { padding: 1px 6px; }
+  .tmux .cur  { background: var(--blue); color: #0c0c0c; font-weight: 600; padding: 1px 2px; }
+  .tmux .right { margin-left: auto; padding: 1px 8px; color: var(--dimmer); }
+
+  .pad { padding: 6px 26px 0; }
+
+  /* welcome box */
+  .box {
+    border: 1px solid var(--rose); border-radius: 8px;
+    margin: 18px 0 0; display: flex; position: relative;
+  }
+  .box-title {
+    position: absolute; top: -14px; left: 22px; background: var(--bg);
+    padding: 0 10px; color: var(--rose-bright); font-weight: 600; font-size: 17px;
+  }
+  .box .left  { flex: 0 0 46%; padding: 22px 8px 16px 20px; text-align: center; }
+  .box .right { flex: 1; border-left: 1px solid var(--rose); padding: 14px 22px 16px; }
+
+  .welcome { font-weight: 600; font-size: 18px; margin-bottom: 10px; }
+  .sprite  { color: #d98d8d; font-size: 13px; line-height: 1.02; letter-spacing: -1px; margin: 8px 0 14px; }
+  .account { color: var(--dim); font-size: 16.5px; text-align: left; padding-left: 28px; }
+  .cwd     { color: var(--dim); font-size: 16.5px; margin-top: 4px; }
+
+  .h { color: var(--rose-bright); font-weight: 700; }
+  .right .tips { padding-bottom: 10px; border-bottom: 1px solid var(--rose); margin-bottom: 10px; }
+  .right p { font-size: 16.5px; }
+  .em { font-style: italic; color: var(--dim); }
+
+  .issues { margin-top: 26px; font-size: 17px; }
+  .issues .y { color: var(--yellow); font-weight: 700; }
+  .issues .d { color: var(--dim); }
+
+  .banner { margin-top: 22px; border-left: 3px solid var(--rose); padding-left: 14px; font-size: 17px; }
+  .banner .t { color: var(--rose-bright); font-weight: 700; }
+  .banner .d { color: var(--dim); }
+
+  .spacer { height: 330px; }
+
+  /* input line */
+  .input { border-top: 1px solid #262626; margin: 0 10px; padding: 12px 16px 4px; display: flex; font-size: 17px; }
+  .input .prompt { color: var(--text); margin-right: 14px; }
+  .caret {
+    display: inline-block; width: 2px; height: 20px; background: #e4e4e4;
+    vertical-align: text-bottom; margin: 0 1px;
+  }
+  .mode { padding: 8px 26px 2px; font-size: 16.5px; }
+  .mode .o { color: var(--orange); font-weight: 700; }
+  .mode .d { color: var(--dim); }
+</style>
+</head>
+<body>
+
+<div class="window">
+
+  <div class="titlebar">
+    <div class="tab"><span class="ps-icon">&gt;_</span> claude code <span class="close">✕</span></div>
+    <div class="newtab">＋</div>
+    <div class="dropdown">˅</div>
+    <div class="wincontrols"><span>—</span><span>☐</span><span>✕</span></div>
+  </div>
+
+  <div class="term">
+
+    <div class="tmux"><span class="session">claude</span><span class="wins"> &lt;webapp  4:api  5:notes  6:infra  7:general  8:db  9:docs  </span><span class="cur">10:claude</span><span class="right">server  13:04</span></div>
+
+    <div class="pad">
+
+      <div class="box">
+        <div class="box-title">Claude Code v2.1.178</div>
+        <div class="left">
+          <div class="welcome">Welcome back!</div>
+          <div class="sprite"><pre>
+  ██        ██
+  ██        ██
+████  ████  ████
+████  ████  ████
+████████████████
+████████████████
+  ██  ██  ██  ██</pre></div>
+          <div class="account">Fable 5 · Claude Max · you@example.com's<br>Organization</div>
+          <div class="cwd">~/projects/pasteover</div>
+        </div>
+        <div class="right">
+          <div class="tips">
+            <p><span class="h">Tips for getting started</span></p>
+            <p>Run /init to create a CLAUDE.md file with instructions…</p>
+          </div>
+          <p><span class="h">What's new</span></p>
+          <p>Added `CLAUDE_CODE_DISABLE_MOUSE_CLICKS` to disable mo…</p>
+          <p>Fixed hook matchers with hyphenated identifiers (e.g. …</p>
+          <p>Fixed voice dictation on macOS capturing silence in lo…</p>
+          <p class="em">/release-notes for more</p>
+        </div>
+      </div>
+
+      <div class="issues"><span class="y">5 setup issues: MCP</span> <span class="d">· /doctor</span></div>
+
+      <div class="banner">
+        <span class="t">Fable 5 is here!</span> Our newest model for complex, long-running work.<br>
+        <span class="d">Included in your plan limits until Jul 8, then switch to usage credits to continue.</span>
+      </div>
+
+      <div class="spacer"></div>
+
+    </div>
+
+    <div class="input">
+      <span class="prompt">❯</span>
+      <span>[Image #1] &lt;- Screenshot <span class="caret"></span>Image pasted with alt+v through ssh tunnel from Windows Terminal</span>
+    </div>
+    <div class="mode"><span class="o">▶▶ auto mode on</span> <span class="d">(shift+tab to cycle)</span></div>
+
+  </div>
+</div>
+
+</body>
+</html>
