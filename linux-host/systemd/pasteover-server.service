@@ -1,12 +1,12 @@
 [Unit]
-Description=pasteover-tunnel (reverse SSH tunnel: laptop pasteover-server -> builds VM 127.0.0.1:18339)
+Description=pasteover-server (Wayland clipboard over loopback for the builds VM)
 Documentation=file:%h/pasteover/linux-host/HANDOFF.md
 After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/pasteover/linux-host/pasteover-tunnel
+ExecStart=%h/pasteover/linux-host/pasteover-server
 Restart=always
 RestartSec=2
 

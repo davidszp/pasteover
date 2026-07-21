@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""clip-server — serve the Wayland clipboard over loopback TCP for pasteover.
+"""pasteover-server — serve the Wayland clipboard over loopback TCP for pasteover.
 
-Linux-laptop port of windows/clip-server.ps1. Answers the exact protocol the
-VM-side clients speak over the SSH RemoteForward tunnel (127.0.0.1:18339):
+Serves this laptop's clipboard (PNG + text) to the VM-side pasteover clients
+(the `xclip` shim and `bigpaste`) over the SSH reverse tunnel on 127.0.0.1:18339,
+using a dumb one-request-per-connection protocol:
 
   CHECK\\n     -> "PNG\\n"  if an image is on the clipboard, else "NONE\\n"   (xclip shim)
   GET\\n       -> raw PNG bytes (empty if none)                              (xclip shim)
@@ -11,7 +12,7 @@ VM-side clients speak over the SSH RemoteForward tunnel (127.0.0.1:18339):
 
 Reads the clipboard via wl-paste (wl-clipboard). Loopback only — nothing is
 exposed to the network. Must run inside the Hyprland session (needs
-WAYLAND_DISPLAY), e.g. `exec-once` in hyprland.conf.
+WAYLAND_DISPLAY); it runs as the pasteover-server.service systemd user unit.
 """
 import socket
 import subprocess
@@ -77,7 +78,7 @@ def main():
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind((HOST, PORT))
     s.listen(8)
-    print(f"clip-server listening on {HOST}:{PORT}", flush=True)
+    print(f"pasteover-server listening on {HOST}:{PORT}", flush=True)
     while True:
         try:
             conn, _ = s.accept()

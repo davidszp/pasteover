@@ -1,26 +1,27 @@
 #!/usr/bin/env bash
-# bigpaste — pull LARGE text from the Windows clipboard over the pasteover SSH
-# tunnel and drop it into a file the agent can read, bypassing the terminal /
-# multiplexer paste-size truncation that mangles big pastes typed into the prompt.
+# bigpaste (pasteover) — pull LARGE text from the laptop clipboard over the
+# pasteover SSH tunnel and drop it into a file the agent can read, bypassing the
+# terminal / multiplexer paste-size truncation that mangles big pastes typed
+# into the prompt.
 #
-# Companion to the xclip image shim. Talks to clip-server.ps1 (the text-capable
-# version) on the Windows host over the same RemoteForward tunnel on
-# 127.0.0.1:18339, using the same dumb one-request-per-connection protocol:
+# Companion to the xclip image shim. Talks to pasteover-server (the clipboard
+# server on the laptop) over the SSH reverse tunnel on 127.0.0.1:18339, using the
+# same dumb one-request-per-connection protocol:
 #   send "CHECKTEXT\n" -> "TEXT\n" / "NONE\n"
 #   send "GETTEXT\n"   -> clipboard text as raw UTF-8 bytes
 #
-# Usage — from the Claude Code prompt (Windows Terminal binds this to Alt+Shift+V):
+# Usage — from the Claude Code prompt, on an empty line:
 #   !bigpaste
 # It saves the clipboard text and prints the path; the agent then reads the file.
 
 set -euo pipefail
 
-PORT="${CLIP_BRIDGE_PORT:-18339}"
-HOST="${CLIP_BRIDGE_HOST:-127.0.0.1}"
-DIR="${PASTEOVER_DIR:-/tmp/pasteover}"
-# Bound every read: the tunnel accepts locally even when the Windows end is
+PORT="${PASTEOVER_PORT:-18339}"
+HOST="${PASTEOVER_HOST:-127.0.0.1}"
+INBOX="${PASTEOVER_INBOX:-/tmp/pasteover-inbox}"
+# Bound every read: the tunnel accepts locally even when the laptop end is
 # asleep/unreachable, so without this a stale connection hangs cat forever.
-TIMEOUT="${CLIP_BRIDGE_TIMEOUT:-8}"
+TIMEOUT="${PASTEOVER_TIMEOUT:-8}"
 
 bridge() {  # bridge CHECKTEXT|GETTEXT  -> server response on stdout (empty on timeout)
     local cmd="$1"
@@ -36,17 +37,17 @@ resp="${resp%%$'\r'*}"; resp="${resp%%$'\n'*}"
 
 if [ "$resp" != "TEXT" ]; then
     {
-        echo "pasteover: no text available from the Windows clipboard (got '${resp:-nothing}')."
+        echo "pasteover: no text available from the laptop clipboard (got '${resp:-nothing}')."
         echo "  - clipboard actually holds text? (an image goes via Alt+V instead)"
         echo "  - tunnel up?  ss -tln | grep $PORT"
-        echo "  - clip-server.ps1 running AND the text-capable version (CHECKTEXT/GETTEXT)?"
+        echo "  - pasteover-server running on the laptop (serves CHECKTEXT/GETTEXT)?"
     } >&2
     exit 1
 fi
 
-mkdir -p "$DIR"
+mkdir -p -m 700 "$INBOX"
 ts="$(date +%Y%m%d-%H%M%S)"
-file="$DIR/paste-$ts.txt"
+file="$INBOX/paste-$ts.txt"
 
 bridge GETTEXT > "$file"
 
@@ -57,7 +58,7 @@ if [ "$bytes" -eq 0 ]; then
     exit 1
 fi
 
-ln -sfn "$file" "$DIR/latest.txt"
+ln -sfn "$file" "$INBOX/latest.txt"
 
 lines=$(wc -l < "$file")
 echo "pasteover: saved $bytes bytes / $lines lines of clipboard text to:"

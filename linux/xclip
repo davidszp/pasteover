@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # xclip shim (pasteover) — bridges agent CLIs' clipboard-image reads to the
-# Windows laptop's clipboard, served by clip-server.ps1 over the SSH
-# RemoteForward tunnel on 127.0.0.1:18339. See the pasteover README.
+# laptop's Wayland clipboard, served by pasteover-server over the SSH reverse
+# tunnel on 127.0.0.1:18339. See the pasteover README.
 #
 # Claude Code (Linux) calls:
 #   xclip -selection clipboard -t TARGETS -o      -> list mime types
 #   xclip -selection clipboard -t image/png -o    -> raw PNG bytes
 # Everything else fails silently (no real xclip on this box).
 
-PORT="${CLIP_BRIDGE_PORT:-18339}"
-HOST="${CLIP_BRIDGE_HOST:-127.0.0.1}"
+PORT="${PASTEOVER_PORT:-18339}"
+HOST="${PASTEOVER_HOST:-127.0.0.1}"
 
 bridge() {  # bridge CHECK|GET  -> server response on stdout
     local cmd="$1"

@@ -2,16 +2,16 @@
 
 The laptop side of pasteover, ported from Windows to a Wayland/Hyprland laptop.
 The **remote (VM) side is unchanged** — `~/.local/bin/xclip`, `~/.local/bin/bigpaste`,
-and `~/pasteover-inbox/` on the VM are what these talk to over the SSH tunnel.
+and `/tmp/pasteover-inbox/` on the VM are what these talk to over the SSH tunnel.
 
 ## What each type does
 
 | Clipboard holds | How it reaches the agent | Needs |
 |---|---|---|
-| **image** / screenshot | agent's **Alt+V** → VM `xclip` shim → pulls PNG from `clip-server` over the tunnel | clip-server + tunnel |
+| **image** / screenshot | agent's **Alt+V** → VM `xclip` shim → pulls PNG from `pasteover-server` over the tunnel | pasteover-server + tunnel |
 | **short text** | normal terminal paste (Ctrl+Shift+V) — goes over the PTY | nothing |
-| **long text** (>~60 KB) | type `!bigpaste` in the agent → VM helper pulls text from `clip-server` | clip-server + tunnel |
-| **file** (PDF/doc/…) | **Super+V** → `pastefile.sh` scp's it to the VM inbox, hands you an `@path` | tunnel + Hyprland bind |
+| **long text** (>~60 KB) | type `!bigpaste` in the agent → VM helper pulls text from `pasteover-server` | pasteover-server + tunnel |
+| **file** (PDF/doc/…) | **Super+Alt+V** → `pasteover-file` scp's it to the VM inbox, hands you an `@path` | tunnel + Hyprland bind |
 
 > **Why Alt+V isn't one universal key here (unlike the Windows build):** on
 > Wayland you can't cleanly suppress-and-re-emit a global key, so Alt+V stays
@@ -42,26 +42,36 @@ passphraseless key for this host.
 scp -r builds:Builds/pasteover ~/pasteover        # or: git clone, once it's pushed
 ```
 
-**2. Make the VM inbox dir** (once; may already exist):
+**2. VM inbox dir** — nothing to do. It's `/tmp/pasteover-inbox` on the VM and
+`pasteover-file` `mkdir -p`s it on each push (so it survives `/tmp` being cleared on
+reboot). Override the location with `PASTEOVER_INBOX` if you want it elsewhere.
+
+**3. Run the bridge as systemd user services** (self-healing — `Restart=always`
+brings them back on a crash, not just on next login). Ship-ready units are in
+`linux-host/systemd/`:
 
 ```bash
-ssh builds 'mkdir -p ~/pasteover-inbox'
+cp ~/pasteover/linux-host/systemd/pasteover-*.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now pasteover-server.service pasteover-tunnel.service
 ```
 
-**3. Autostart the bridge + bind the file key.** Add to your Hyprland config
-(Omarchy: `~/.config/hypr/hyprland.conf`, or the `autostart` / `bindings` files
-it sources):
+They're `WantedBy=graphical-session.target`, so they start on login (survive
+reboot) and restart within seconds if either process dies. Omarchy/uwsm exposes
+`WAYLAND_DISPLAY` to the systemd user manager, so `pasteover-server` gets the
+clipboard access it needs.
+
+**4. Bind the file-paste key** in `~/.config/hypr/bindings.conf`. `SUPER, V` is
+Omarchy's Universal paste, so file-paste lives on `SUPER ALT, V`:
 
 ```bash
-exec-once = ~/pasteover/linux-host/tunnel.sh          # keep the reverse tunnel up
-exec-once = ~/pasteover/linux-host/clip-server        # serve the clipboard over it
-bind = SUPER, V, exec, ~/pasteover/linux-host/pastefile.sh   # file paste
+bind = SUPER ALT, V, exec, ~/pasteover/linux-host/pasteover-file
 ```
 
-Then reload Hyprland (`hyprctl reload`) or log out/in.
+Then `hyprctl reload` (and check `hyprctl configerrors`).
 
-**4. Do NOT** add `RemoteForward 18339 127.0.0.1:18339` to `~/.ssh/config` for
-the `builds` host — `tunnel.sh` owns that port; a config forward would collide.
+**5. Do NOT** add `RemoteForward 18339 127.0.0.1:18339` to `~/.ssh/config` for
+the `builds` host — `pasteover-tunnel` owns that port; a config forward would collide.
 
 ## Test
 
@@ -69,28 +79,31 @@ the `builds` host — `tunnel.sh` owns that port; a config forward would collide
 # tunnel up? (run on the VM)
 ssh builds 'ss -tln | grep 18339'                 # should show a listener
 
-# clip-server answering? copy a screenshot, then on the VM:
-ssh builds 'printf CHECK | nc 127.0.0.1 18339'    # -> PNG   (NONE if clipboard is text/empty)
+# pasteover-server answering? copy a screenshot, then on the VM:
+ssh builds "printf 'CHECK\n' | nc -w2 127.0.0.1 18339"   # -> PNG   (NONE if clipboard is text/empty)
 ```
 
 - **Image:** copy/screenshot → focus the agent on an empty prompt → **Alt+V**.
-- **File:** copy a file in your file manager → **Super+V** → notification says it's
+- **File:** copy a file in your file manager → **Super+Alt+V** → notification says it's
   on the VM → **Ctrl+Shift+V** into the agent to drop the `@path` (or set
   `PASTEOVER_WTYPE=1` to have it typed for you).
 - **Long text:** copy → type `!bigpaste` in the agent.
 
 ## Tunables (env vars)
 
-`PASTEOVER_SSH_HOST` (default `builds`), `PASTEOVER_INBOX` (default
-`<remote $HOME>/pasteover-inbox`), `PASTEOVER_PREFIX` (`@` → `` for a bare path),
+`PASTEOVER_SSH_HOST` (default `builds`), `PASTEOVER_INBOX`
+(`/tmp/pasteover-inbox`), `PASTEOVER_PREFIX` (`@` → `` for a bare path),
 `PASTEOVER_PORT` (`18339`), `PASTEOVER_WTYPE` (`1` = auto-type the mention).
 
 ## Notes / gotchas
 
-- `clip-server` must run **inside** the Hyprland session (it needs
-  `WAYLAND_DISPLAY`) — that's why it's an `exec-once`, not a plain systemd service.
+- `pasteover-server` must run **inside** the Hyprland session (it needs
+  `WAYLAND_DISPLAY`). It runs as a systemd **user** service — Omarchy/uwsm imports
+  `WAYLAND_DISPLAY` into the user manager, and the unit is
+  `WantedBy=graphical-session.target`, so it starts with the session. (A plain
+  *system* service would not have the Wayland env — keep it a user unit.)
 - The **file** path depends on your file manager putting a `file://` URI (or a
-  plain path) on the clipboard; `pastefile.sh` handles both. GUI managers
+  plain path) on the clipboard; `pasteover-file` handles both. GUI managers
   (Nautilus/Thunar) set `text/uri-list`; terminal ones (yazi) usually yank the path.
 - Everything stays on the loopback SSH tunnel; files ride the same authenticated
   `ssh builds` connection (no new listener on the VM).
