@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""clip-server — serve the Wayland clipboard over loopback TCP for pasteover.
+
+Linux-laptop port of windows/clip-server.ps1. Answers the exact protocol the
+VM-side clients speak over the SSH RemoteForward tunnel (127.0.0.1:18339):
+
+  CHECK\\n     -> "PNG\\n"  if an image is on the clipboard, else "NONE\\n"   (xclip shim)
+  GET\\n       -> raw PNG bytes (empty if none)                              (xclip shim)
+  CHECKTEXT\\n -> "TEXT\\n" if text is on the clipboard, else "NONE\\n"       (bigpaste)
+  GETTEXT\\n   -> clipboard text as UTF-8 bytes (empty if none)              (bigpaste)
+
+Reads the clipboard via wl-paste (wl-clipboard). Loopback only — nothing is
+exposed to the network. Must run inside the Hyprland session (needs
+WAYLAND_DISPLAY), e.g. `exec-once` in hyprland.conf.
+"""
+import socket
+import subprocess
+
+HOST = "127.0.0.1"
+PORT = 18339
+
+TEXT_TYPES = ("UTF8_STRING", "STRING", "TEXT")
+
+
+def clipboard_types():
+    p = subprocess.run(["wl-paste", "--list-types"], capture_output=True, text=True)
+    if p.returncode != 0:
+        return set()                       # empty clipboard: wl-paste exits non-zero
+    return {t.strip() for t in p.stdout.split() if t.strip()}
+
+
+def has_image(types):
+    return "image/png" in types
+
+
+def has_text(types):
+    return any(t.startswith("text/plain") for t in types) or any(t in types for t in TEXT_TYPES)
+
+
+def get_png():
+    p = subprocess.run(["wl-paste", "-t", "image/png"], capture_output=True)
+    return p.stdout if p.returncode == 0 else b""
+
+
+def get_text():
+    p = subprocess.run(["wl-paste", "-n", "-t", "text/plain;charset=utf-8"], capture_output=True)
+    if p.returncode != 0 or not p.stdout:
+        p = subprocess.run(["wl-paste", "-n"], capture_output=True)   # any text form
+    return p.stdout if p.returncode == 0 else b""
+
+
+def handle(conn):
+    conn.settimeout(5)
+    data = b""
+    while b"\n" not in data and len(data) < 16:
+        chunk = conn.recv(16)
+        if not chunk:
+            break
+        data += chunk
+    cmd = data.split(b"\n", 1)[0].strip().decode("ascii", "ignore")
+
+    types = clipboard_types()
+    if cmd == "CHECK":
+        conn.sendall(b"PNG\n" if has_image(types) else b"NONE\n")
+    elif cmd == "GET":
+        if has_image(types):
+            conn.sendall(get_png())
+    elif cmd == "CHECKTEXT":
+        conn.sendall(b"TEXT\n" if has_text(types) else b"NONE\n")
+    elif cmd == "GETTEXT":
+        if has_text(types):
+            conn.sendall(get_text())
+
+
+def main():
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind((HOST, PORT))
+    s.listen(8)
+    print(f"clip-server listening on {HOST}:{PORT}", flush=True)
+    while True:
+        try:
+            conn, _ = s.accept()
+        except KeyboardInterrupt:
+            break
+        try:
+            handle(conn)
+        except Exception:
+            pass          # per-connection errors are non-fatal
+        finally:
+            conn.close()
+
+
+if __name__ == "__main__":
+    main()

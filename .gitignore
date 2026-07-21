@@ -1,0 +1,6 @@
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Internal, machine-specific handoff notes (kept local, not for the public repo)
+linux-host/HANDOFF.md

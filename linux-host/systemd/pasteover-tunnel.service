@@ -1,0 +1,14 @@
+[Unit]
+Description=pasteover reverse SSH tunnel (laptop clip-server -> builds VM 127.0.0.1:18339)
+Documentation=file:%h/pasteover/linux-host/README.md
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/pasteover/linux-host/tunnel.sh
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

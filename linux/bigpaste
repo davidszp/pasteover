@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# bigpaste — pull LARGE text from the Windows clipboard over the pasteover SSH
+# tunnel and drop it into a file the agent can read, bypassing the terminal /
+# multiplexer paste-size truncation that mangles big pastes typed into the prompt.
+#
+# Companion to the xclip image shim. Talks to clip-server.ps1 (the text-capable
+# version) on the Windows host over the same RemoteForward tunnel on
+# 127.0.0.1:18339, using the same dumb one-request-per-connection protocol:
+#   send "CHECKTEXT\n" -> "TEXT\n" / "NONE\n"
+#   send "GETTEXT\n"   -> clipboard text as raw UTF-8 bytes
+#
+# Usage — from the Claude Code prompt (Windows Terminal binds this to Alt+Shift+V):
+#   !bigpaste
+# It saves the clipboard text and prints the path; the agent then reads the file.
+
+set -euo pipefail
+
+PORT="${CLIP_BRIDGE_PORT:-18339}"
+HOST="${CLIP_BRIDGE_HOST:-127.0.0.1}"
+DIR="${PASTEOVER_DIR:-/tmp/pasteover}"
+# Bound every read: the tunnel accepts locally even when the Windows end is
+# asleep/unreachable, so without this a stale connection hangs cat forever.
+TIMEOUT="${CLIP_BRIDGE_TIMEOUT:-8}"
+
+bridge() {  # bridge CHECKTEXT|GETTEXT  -> server response on stdout (empty on timeout)
+    local cmd="$1"
+    exec 3<>"/dev/tcp/$HOST/$PORT" 2>/dev/null || return 1
+    printf '%s\n' "$cmd" >&3
+    timeout "$TIMEOUT" cat <&3 || true
+    exec 3<&- 3>&-
+    return 0
+}
+
+resp="$(bridge CHECKTEXT 2>/dev/null || true)"
+resp="${resp%%$'\r'*}"; resp="${resp%%$'\n'*}"
+
+if [ "$resp" != "TEXT" ]; then
+    {
+        echo "pasteover: no text available from the Windows clipboard (got '${resp:-nothing}')."
+        echo "  - clipboard actually holds text? (an image goes via Alt+V instead)"
+        echo "  - tunnel up?  ss -tln | grep $PORT"
+        echo "  - clip-server.ps1 running AND the text-capable version (CHECKTEXT/GETTEXT)?"
+    } >&2
+    exit 1
+fi
+
+mkdir -p "$DIR"
+ts="$(date +%Y%m%d-%H%M%S)"
+file="$DIR/paste-$ts.txt"
+
+bridge GETTEXT > "$file"
+
+bytes=$(wc -c < "$file")
+if [ "$bytes" -eq 0 ]; then
+    echo "pasteover: clipboard text came back empty; nothing saved." >&2
+    rm -f "$file"
+    exit 1
+fi
+
+ln -sfn "$file" "$DIR/latest.txt"
+
+lines=$(wc -l < "$file")
+echo "pasteover: saved $bytes bytes / $lines lines of clipboard text to:"
+echo "  $file"
+echo "Read that file to see the pasted content."

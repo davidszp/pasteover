@@ -120,6 +120,141 @@ a screenshot with `Win+Shift+S`, press **Alt+V** in Claude Code →
 
 ---
 
+## Bonus: large text pastes (Alt+Shift+V)
+
+Terminals, SSH, and multiplexers (tmux and friends) **truncate very large
+pastes** before the app ever sees them — paste 60 KB of text into Claude Code
+over SSH and it arrives cut short. Claude Code itself doesn't truncate (it
+collapses big pastes to a `[Pasted text #N]` placeholder and sends the full
+content on submit); the loss happens at the terminal/PTY layer.
+
+pasteover sidesteps it the same way it does images — over the SSH tunnel
+instead of the paste path. `clip-server.ps1` also serves clipboard **text**
+(`CHECKTEXT`/`GETTEXT`), and the `linux/bigpaste` helper pulls it into a file
+the agent reads, so there's no size limit.
+
+**Install the helper (remote/Linux):**
+
+```bash
+cp ~/pasteover/linux/bigpaste ~/.local/bin/bigpaste
+chmod +x ~/.local/bin/bigpaste
+```
+
+**Add a Windows Terminal keybinding** — in Settings → Open JSON file, add to
+the `actions` (or `keybindings`) array a key that types `!bigpaste` + Enter
+into the focused pane:
+
+```json
+{ "keys": "alt+shift+v", "command": { "action": "sendInput", "input": "!bigpaste\r" } }
+```
+
+**Use it:** copy text on Windows, focus Claude Code on an **empty** prompt,
+press **Alt+Shift+V**. That runs `bigpaste` via Claude Code's `!` shell prefix;
+it saves the clipboard text to `/tmp/pasteover/paste-<timestamp>.txt` and prints
+the path into the conversation, which Claude then reads. (Alt+V still handles
+images; Alt+Shift+V handles text — the two are independent.)
+
+You can also just type `!bigpaste` yourself if you'd rather not add the
+keybinding. The helper reuses the same tunnel, so no extra setup beyond the
+text-capable `clip-server.ps1`.
+
+---
+
+## Universal paste — one key (Alt+V) for everything (smartpaste)
+
+`windows/smartpaste.py` makes **Alt+V paste whatever is on the clipboard** — no
+second key to remember:
+
+| Clipboard holds | smartpaste does |
+|---|---|
+| a **file** (PDF, doc, code, …) | `scp`s it to `~/pasteover-inbox/` on the remote, then types an `@/home/you/pasteover-inbox/<name>` mention into the terminal — the agent reads it |
+| an **image** / screenshot | hands Alt+V back to the agent's own image paste (the proven xclip-shim path — **unchanged**) |
+| **small text** (≤ 4000 chars) | fires **Ctrl+V** (inline terminal paste) |
+| **large text** (> 4000 chars) | runs `!bigpaste` (over the tunnel, no PTY truncation) |
+
+**How one key does it all:** a global hook owns Alt+V and suppresses it, so it
+reaches this script *before* the agent. For images — and whenever the focused
+window isn't your terminal — the hook briefly unhooks itself, re-emits a real
+Alt+V, and re-arms, so Alt+V behaves exactly as before there. **No
+keybindings.json change** — `alt+v → chat:imagePaste` stays as-is, and the base
+image/text setup above is untouched. Files are *pushed* over the same
+passwordless key-auth SSH the tunnel already uses (Host alias `builds`) — no new
+auth, nothing new listens on the remote.
+
+The old **Alt+Shift+V** `!bigpaste` Terminal keybinding is now redundant (Alt+V
+handles large text too); keep or remove it — smartpaste still calls the
+`linux/bigpaste` helper, so leave that installed.
+
+**Install (Windows):**
+
+```powershell
+pip install keyboard pywin32          # deps (run once)
+```
+
+On the **remote**, make the inbox dir (files land here):
+
+```bash
+mkdir -p ~/pasteover-inbox
+```
+
+**Run it (hidden, at logon)** alongside `clip-server.ps1` / `tunnel.ps1` — use
+`pythonw.exe` so there's no console window:
+
+```powershell
+pythonw.exe $HOME\pasteover\windows\smartpaste.py
+```
+
+Register it the same way as the tunnel (Task Scheduler → At log on → run
+`pythonw.exe` with the script path, hidden). To test in the foreground first,
+run it with plain `python.exe` and watch the log lines.
+
+**Use it:** copy a file / image / text on Windows, focus the agent on an
+**empty** prompt, press **Alt+V**. For files the `@path` is typed in ready to
+send; review, then Enter. (`keyboard` needs the hook installed at the OS level —
+if Alt+V does nothing, run the terminal, or smartpaste, **as administrator**.)
+
+**Tunables** (env vars, all optional): `SMARTPASTE_HOTKEY`,
+`SMARTPASTE_SSH_HOST`, `SMARTPASTE_INBOX`, `SMARTPASTE_PREFIX` (`@` → `` for a
+bare path), `SMARTPASTE_TEXT_INLINE_MAX`, `SMARTPASTE_MAX_BYTES`,
+`SMARTPASTE_TERMINALS` (comma list of terminal exe names to act in; empty =
+always act).
+
+**Inbox housekeeping** — files accumulate in `~/pasteover-inbox/`. Prune old
+ones with a cron entry on the remote, e.g. daily:
+
+```bash
+find ~/pasteover-inbox -type f -mtime +7 -delete
+```
+
+**Works for any agent CLI** (Codex, opencode, …): images/text are agent-agnostic
+already, and a file is just a path the agent can open — set `SMARTPASTE_IMAGE_KEY`
+if the agent binds image paste to something other than Alt+V.
+
+---
+
+## Keeping the tunnel always up (optional but recommended)
+
+The `RemoteForward` only lives as long as the SSH session that carries it, so if
+you open and close interactive sessions the bridge dies half the time. Note the
+tunnel is a *reverse* forward **initiated by the Windows host** — the remote box
+is the SSH server and can't create it, so any keepalive must run on Windows (a
+scheduled task is the Windows equivalent of a systemd unit).
+
+`windows/tunnel.ps1` holds a dedicated, auto-reconnecting SSH connection open in
+the background so the tunnel is up whenever the laptop is:
+
+```powershell
+# 1. requires non-interactive (key-auth, no passphrase prompt) SSH to the remote:
+ssh -o BatchMode=yes your-server "echo ok"
+# 2. remove `RemoteForward 18339 127.0.0.1:18339` from your Host block in
+#    ~/.ssh/config so interactive sessions don't fight this dedicated tunnel.
+# 3. register it hidden at logon:
+Register-ScheduledTask -TaskName 'pasteover-tunnel' -Action (New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File $HOME\tunnel.ps1") -Trigger (New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME")
+Start-ScheduledTask -TaskName 'pasteover-tunnel'
+```
+
+Edit `$remote` at the top of `tunnel.ps1` to match your SSH host alias.
+
 ## Troubleshooting
 
 Work down the chain from the Linux side:
@@ -188,7 +323,10 @@ merge instead of overwriting.
 | File | Goes to | Machine |
 |---|---|---|
 | `linux/xclip` | `~/.local/bin/xclip` (`chmod +x`) | remote (Linux) |
+| `linux/bigpaste` | `~/.local/bin/bigpaste` (`chmod +x`) — large-text paste | remote (Linux) |
 | `windows/clip-server.ps1` | anywhere, e.g. `$HOME` | host (Windows) |
+| `windows/tunnel.ps1` | anywhere, e.g. `$HOME` — keeps the tunnel always up | host (Windows) |
+| `windows/smartpaste.py` | anywhere, e.g. `$HOME\pasteover\windows` — universal one-key paste (files/images/text) | host (Windows) |
 | `claude/keybindings.json` | `~/.claude/keybindings.json` | remote (Linux) |
 
 ## Prior art
