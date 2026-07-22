@@ -38,7 +38,13 @@ REMOTE="${PASTEOVER_SSH_HOST:-builds}"               # ~/.ssh/config alias, key 
 INBOX="${PASTEOVER_INBOX:-/tmp/pasteover-inbox}"     # on the VM; /tmp clears on reboot, recreated on demand
 PREFIX="${PASTEOVER_PREFIX:-@}"                       # "@" = file mention; "" = bare path
 IMAGE_KEY="${PASTEOVER_IMAGE_KEY:-alt v}"            # wtype combo the agent maps to imagePaste
-PASTE_KEY="${PASTEOVER_PASTE_KEY:-ctrl shift v}"     # terminal's own paste (small text)
+PASTE_KEY="${PASTEOVER_PASTE_KEY:-ctrl shift v}"     # (legacy) wtype paste combo, if PASTE_SHORTCUT is blanked
+# Small-text paste is delivered via Hyprland's `sendshortcut` dispatcher, NOT wtype:
+# it mirrors Omarchy's SUPER+V "Universal paste" (sendshortcut SHIFT, Insert, activewindow),
+# which lands cleanly in a remote TUI over SSH where a wtype Ctrl+Shift+V can be dropped
+# (the first synthetic event after the SUPER+ALT chord gets mangled by the still-held mods).
+# Set PASTEOVER_PASTE_SHORTCUT="" to fall back to the old wtype path ($PASTE_KEY).
+PASTE_SHORTCUT="${PASTEOVER_PASTE_SHORTCUT-SHIFT, Insert}"  # Hyprland sendshortcut "MODS, key"; terminal must map it to paste (Omarchy: Shift+Insert)
 BIGPASTE_CMD="${PASTEOVER_BIGPASTE:-!bigpaste}"      # agent shell cmd for large text
 TEXT_INLINE_MAX="${PASTEOVER_TEXT_INLINE_MAX:-4000}" # chars; above -> bigpaste
 KEY_DELAY="${PASTEOVER_KEY_DELAY:-0.15}"             # let physical modifiers lift before we synthesize
@@ -148,7 +154,14 @@ if has_text; then
     len="$(wl-paste -n 2>/dev/null | wc -m)"
     sleep "$KEY_DELAY"
     if [ "${len:-0}" -le "$TEXT_INLINE_MAX" ]; then
-        synth "$PASTE_KEY"   # bracketed paste over the PTY
+        # Paste like Omarchy's SUPER+V: hand a clean Shift+Insert to the focused
+        # window via Hyprland's dispatcher (survives held SUPER+ALT, reaches the
+        # remote TUI over SSH). Fall back to the wtype combo if PASTE_SHORTCUT="".
+        if [ -n "$PASTE_SHORTCUT" ] && command -v hyprctl >/dev/null 2>&1; then
+            hyprctl dispatch sendshortcut "${PASTE_SHORTCUT}, activewindow" >/dev/null
+        else
+            synth "$PASTE_KEY"   # bracketed paste over the PTY (wtype fallback)
+        fi
     else
         wtype "$BIGPASTE_CMD"
         wtype -k Return
