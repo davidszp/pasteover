@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# pasteover-smart — ONE key that pastes ANYTHING from the Wayland clipboard into
+# a remote agent CLI (Claude Code, Codex, opencode, ...) over SSH. The
+# Wayland/Hyprland port of windows/smartpaste.py — bind it to SUPER+ALT+V.
+#
+# Press the bound key and it inspects the clipboard and does the right thing:
+#
+#   * file(s)  (PDF, doc, code, ...) -> scp the bytes to the VM inbox, then type
+#                                       an "@<path>" mention so the agent Reads it.
+#   * image / screenshot             -> re-emit the agent's own image-paste key
+#                                       (Alt+V) so the proven xclip-shim path
+#                                       fires — unchanged, VM side untouched.
+#   * small text  (<= ~4000 chars)   -> the terminal's own paste key
+#                                       (Ctrl+Shift+V): bracketed paste over the PTY.
+#   * large text  (>  ~4000 chars)   -> type "!bigpaste" so the VM helper pulls
+#                                       the text over the tunnel into a file
+#                                       (terminals/muxers truncate huge inline pastes).
+#
+# Why one key CAN be universal on Wayland (the old note said it couldn't): a
+# Hyprland `bind` already *consumes* the key — that is the "suppress" half that
+# the Windows build needed a global keyboard hook for. `wtype` supplies the
+# "re-emit" half. The single rule: the re-emitted key must DIFFER from the bound
+# key, or Hyprland would re-trigger this script. So bind to SUPER+ALT+V and let
+# the image branch re-emit plain Alt+V (the agent's imagePaste key — which is why
+# no keybindings.json change is needed on the VM). A short delay lets your
+# physical SUPER/ALT lift before we synthesize; a flock guard swallows any
+# accidental double-fire.
+#
+# Deps (laptop):  wl-clipboard (wl-paste), wtype, openssh, hyprland (hyprctl),
+#                 libnotify (notify-send, optional).
+# Bind (~/.config/hypr/bindings.conf):
+#   bind = SUPER ALT, V, exec, ~/pasteover/linux-host/pasteover-smart
+
+set -uo pipefail
+
+# ---- config (env-overridable) ------------------------------------------------
+REMOTE="${PASTEOVER_SSH_HOST:-builds}"               # ~/.ssh/config alias, key auth
+INBOX="${PASTEOVER_INBOX:-/tmp/pasteover-inbox}"     # on the VM; /tmp clears on reboot, recreated on demand
+PREFIX="${PASTEOVER_PREFIX:-@}"                       # "@" = file mention; "" = bare path
+IMAGE_KEY="${PASTEOVER_IMAGE_KEY:-alt v}"            # wtype combo the agent maps to imagePaste
+PASTE_KEY="${PASTEOVER_PASTE_KEY:-ctrl shift v}"     # terminal's own paste (small text)
+BIGPASTE_CMD="${PASTEOVER_BIGPASTE:-!bigpaste}"      # agent shell cmd for large text
+TEXT_INLINE_MAX="${PASTEOVER_TEXT_INLINE_MAX:-4000}" # chars; above -> bigpaste
+KEY_DELAY="${PASTEOVER_KEY_DELAY:-0.15}"             # let physical modifiers lift before we synthesize
+# Only act when one of these window classes is focused; empty = act regardless.
+TERMINALS="${PASTEOVER_TERMINALS:-Alacritty kitty foot ghostty com.mitchellh.ghostty org.wezfurlong.wezterm wezterm}"
+
+notify() { command -v notify-send >/dev/null 2>&1 && notify-send "pasteover" "$1" || echo "pasteover: $1"; }
+
+# ---- anti-double-fire: hold a lock for the life of this run ------------------
+# Hyprland binds don't key-repeat, but if the synthesized Alt+V lands while
+# SUPER+ALT is still physically down it could re-enter us — the lock makes the
+# re-entry a no-op instead of a loop.
+exec 9>"/tmp/pasteover-smart.lock"
+flock -n 9 || exit 0
+
+# ---- wtype helper: "ctrl shift v" -> -M ctrl -M shift -k v -m shift -m ctrl --
+# wtype modifier names: shift, ctrl, alt, logo (super), altgr, capslock, num.
+synth() {
+    local -a combo=($1) mods=() args=()
+    local a key="" m i
+    for a in "${combo[@]}"; do
+        case "$a" in
+            super|win|meta|logo) mods+=("logo") ;;
+            ctrl|alt|shift|altgr|capslock|num) mods+=("$a") ;;
+            *) key="$a" ;;
+        esac
+    done
+    for m in "${mods[@]}"; do args+=(-M "$m"); done
+    [ -n "$key" ] && args+=(-k "$key")
+    for ((i=${#mods[@]}-1; i>=0; i--)); do args+=(-m "${mods[$i]}"); done
+    wtype "${args[@]}"
+}
+
+urldecode() {  # percent-decode a file:// path (spaces -> %20 etc.)
+    local s="${1//+/ }"
+    printf '%b' "${s//%/\\x}"
+}
+
+focused_class() {
+    hyprctl activewindow -j 2>/dev/null | grep -m1 '"class"' | sed 's/.*: *"\(.*\)".*/\1/'
+}
+
+is_terminal() {
+    [ -z "$TERMINALS" ] && return 0
+    local cls; cls="$(focused_class)"
+    local t
+    for t in $TERMINALS; do [ "$cls" = "$t" ] && return 0; done
+    return 1
+}
+
+# ---- inspect the clipboard (files > image > text, matching smartpaste.py) ----
+types="$(wl-paste --list-types 2>/dev/null || true)"
+
+has_image() { printf '%s\n' "$types" | grep -qi 'image/png'; }
+has_text()  { printf '%s\n' "$types" | grep -qiE '^(text/plain|UTF8_STRING|STRING|TEXT)$'; }
+
+# Collect file paths: prefer text/uri-list; fall back to a plain clipboard path
+# (terminal file managers like yazi yank a bare path).
+paths=()
+while IFS= read -r line; do
+    line="${line%$'\r'}"; [ -n "$line" ] || continue
+    [[ "$line" == file://* ]] && paths+=("$(urldecode "${line#file://}")")
+done < <(wl-paste -t text/uri-list 2>/dev/null || true)
+if [ ${#paths[@]} -eq 0 ]; then
+    cand="$(wl-paste -n 2>/dev/null || true)"
+    [ -n "$cand" ] && [ "${cand%%$'\n'*}" = "$cand" ] && [ -f "$cand" ] && paths+=("$cand")
+fi
+
+# Everything except the scp itself needs the terminal focused to receive keys.
+if ! is_terminal; then
+    notify "focus your agent terminal, then press the paste key"
+    exit 0
+fi
+
+# ---- files -------------------------------------------------------------------
+if [ ${#paths[@]} -gt 0 ]; then
+    ssh -o BatchMode=yes "$REMOTE" "mkdir -p -m 700 -- '$INBOX'" 2>/dev/null
+    mentions=()
+    for p in "${paths[@]}"; do
+        [ -f "$p" ] || continue
+        safe="$(basename -- "$p")"; safe="${safe//[^A-Za-z0-9._-]/_}"
+        if scp -B -q "$p" "${REMOTE}:${INBOX}/${safe}"; then
+            mentions+=("${PREFIX}${INBOX}/${safe}")
+        else
+            notify "scp failed for $(basename -- "$p")"
+        fi
+    done
+    if [ ${#mentions[@]} -eq 0 ]; then
+        notify "no files pushed"
+        exit 1
+    fi
+    sleep "$KEY_DELAY"
+    wtype "${mentions[*]} "
+    notify "typed ${#mentions[@]} file mention(s)"
+    exit 0
+fi
+
+# ---- image -------------------------------------------------------------------
+if has_image; then
+    sleep "$KEY_DELAY"
+    synth "$IMAGE_KEY"        # hand off to the agent's own image paste (xclip shim)
+    exit 0
+fi
+
+# ---- text --------------------------------------------------------------------
+if has_text; then
+    len="$(wl-paste -n 2>/dev/null | wc -m)"
+    sleep "$KEY_DELAY"
+    if [ "${len:-0}" -le "$TEXT_INLINE_MAX" ]; then
+        synth "$PASTE_KEY"   # bracketed paste over the PTY
+    else
+        wtype "$BIGPASTE_CMD"
+        wtype -k Return
+        notify "$len chars -> $BIGPASTE_CMD (large paste via the tunnel)"
+    fi
+    exit 0
+fi
+
+notify "clipboard empty / unsupported"
+exit 0
