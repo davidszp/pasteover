@@ -24,7 +24,7 @@ not any Claude Code running locally on the laptop. (`SUPER+V` alone is Omarchy's
 |---|---|---|
 | **file** (PDF/doc/…) | scp's it to the VM inbox, then types an `@path` mention | tunnel + `wtype` |
 | **image** / screenshot | re-emits **Alt+V** so the agent's own image paste fires (VM `xclip` shim pulls the PNG over the tunnel) | server + tunnel + `wtype` |
-| **small text** (≤ ~4000 chars) | fires **Ctrl+Shift+V** (bracketed paste over the PTY) | `wtype` |
+| **small text** (≤ ~4000 chars) | sends a clean **Shift+Insert** via Hyprland's `sendshortcut` — exactly like Omarchy's SUPER+V — so it lands in the remote TUI over SSH (a wtype `Ctrl+Shift+V` gets dropped there) | `hyprctl` |
 | **large text** (> ~4000 chars) | types `!bigpaste` → VM helper pulls the text over the tunnel into a file | server + tunnel + `wtype` |
 
 > **Why one key CAN be universal here** (the earlier build split it across keys
@@ -137,8 +137,12 @@ its `notify`/stderr output while debugging.
 `pasteover-file` only).
 
 `pasteover-smart` adds: `PASTEOVER_IMAGE_KEY` (`alt v` — must match the agent's
-imagePaste binding), `PASTEOVER_PASTE_KEY` (`ctrl shift v` — your terminal's own
-paste), `PASTEOVER_BIGPASTE` (`!bigpaste`), `PASTEOVER_TEXT_INLINE_MAX` (`4000`
+imagePaste binding), `PASTEOVER_PASTE_SHORTCUT` (`SHIFT, Insert` — the Hyprland
+`sendshortcut` combo used for small-text paste, matching Omarchy's SUPER+V; your
+terminal must map it to paste. Set it empty `""` to fall back to the old wtype
+path), `PASTEOVER_PASTE_KEY` (`ctrl shift v` — the wtype fallback combo, only used
+when `PASTEOVER_PASTE_SHORTCUT` is empty), `PASTEOVER_BIGPASTE` (`!bigpaste`),
+`PASTEOVER_TEXT_INLINE_MAX` (`4000`
 chars; above → bigpaste), `PASTEOVER_KEY_DELAY` (`0.15` s — time for your
 physical SUPER/ALT to lift before it synthesizes), `PASTEOVER_TERMINALS`
 (space-separated window classes it acts in; empty = act regardless of focus).
