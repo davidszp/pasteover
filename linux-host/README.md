@@ -9,6 +9,17 @@ and `/tmp/pasteover-inbox/` on the VM are what these talk to over the SSH tunnel
 `pasteover-smart` is the Wayland port of the Windows `smartpaste.py`: bind **one**
 key (`SUPER+ALT+V`) and it inspects the clipboard and does the right thing.
 
+**`SUPER+ALT+V` is the single universal paste into Claude Code on the VM** — no
+matter whether the clipboard holds short text, long text, an image, or a file
+(PDF or anything else). Mental model: the script runs **on the laptop** and
+synthesizes keystrokes / pushes bytes into whatever laptop window is **focused**.
+The intended target is the **laptop terminal that holds your `ssh builds` session
+running Claude Code** — the keystrokes travel through that SSH session into the
+VM's agent prompt (and the image / large-text bytes ride the reverse tunnel).
+Wherever this README says "the agent terminal," it means *that* laptop terminal,
+not any Claude Code running locally on the laptop. (`SUPER+V` alone is Omarchy's
+*local* clipboard paste — unrelated.)
+
 | Clipboard holds | `pasteover-smart` does | Needs |
 |---|---|---|
 | **file** (PDF/doc/…) | scp's it to the VM inbox, then types an `@path` mention | tunnel + `wtype` |
